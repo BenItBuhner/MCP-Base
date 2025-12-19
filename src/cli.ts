@@ -11,8 +11,7 @@ import { URL } from "url";
 import { CLIOAuthProvider, resolveOAuthConfig } from "./oauth.js";
 import { ServerConfig, ServersFile, AuthConfig } from "./types.js";
 import { AnthropicProvider } from "./providers/anthropic.js";
-import { OpenAIProvider } from "./providers/openai.js";
-import { MCPTool } from "./mcp-to-openai.js";
+import { OpenAIProvider, MCPTool } from "./providers/openai.js";
 
 // Load environment variables
 dotenv.config({ path: ".env" });
