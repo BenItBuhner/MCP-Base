@@ -1,26 +1,4 @@
-/**
- * MCP Client CLI
- *
- * A command-line MCP client that:
- * - Loads server definitions from a JSON file (default: ./mcp-servers.json)
- * - Supports multiple authentication methods: none, bearer token, OAuth
- * - Resolves header/config placeholders like ${ENV_VAR} from process.env
- * - Connects to Streamable HTTP MCP servers or local stdio MCP servers
- * - Uses Anthropic for LLM calls (configured via .env)
- * - Supports multi-turn tool_use handling
- *
- * Usage:
- *  - Set environment variables (or use .env):
- *      ANTHROPIC_API_KEY, ANTHROPIC_BASE_URL, ANTHROPIC_MODEL
- *  - Create mcp-servers.json with server configs (see types.ts for schema)
- *  - Run: bun src/cli.ts
- */
-
-import { Anthropic } from "@anthropic-ai/sdk";
-import {
-  MessageParam,
-  Tool,
-} from "@anthropic-ai/sdk/resources/messages/messages.mjs";
+import { Tool } from "@anthropic-ai/sdk/resources/messages/messages.mjs";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
@@ -32,23 +10,12 @@ import { URL } from "url";
 
 import { CLIOAuthProvider, resolveOAuthConfig } from "./oauth.js";
 import { ServerConfig, ServersFile, AuthConfig } from "./types.js";
+import { AnthropicProvider } from "./providers/anthropic.js";
+import { OpenAIProvider } from "./providers/openai.js";
+import { MCPTool } from "./mcp-to-openai.js";
 
 // Load environment variables
 dotenv.config({ path: ".env" });
-
-// Required Anthropic configuration
-const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
-const ANTHROPIC_BASE_URL = process.env.ANTHROPIC_BASE_URL;
-const ANTHROPIC_MODEL = process.env.ANTHROPIC_MODEL;
-
-if (!ANTHROPIC_API_KEY || !ANTHROPIC_BASE_URL || !ANTHROPIC_MODEL) {
-  console.error(
-    "Missing required environment variables. Please set ANTHROPIC_API_KEY, ANTHROPIC_BASE_URL, and ANTHROPIC_MODEL.",
-  );
-  throw new Error(
-    "ANTHROPIC_API_KEY, ANTHROPIC_BASE_URL, or ANTHROPIC_MODEL is not set",
-  );
-}
 
 /**
  * Load server configurations from a JSON file
@@ -157,19 +124,22 @@ function normalizeHeaders(
  */
 class MCPClient {
   private mcp: Client;
-  private anthropic: Anthropic;
+  private provider: AnthropicProvider | OpenAIProvider;
   private transport:
     | StreamableHTTPClientTransport
     | StdioClientTransport
     | null = null;
-  private tools: Tool[] = [];
+  private tools: MCPTool[] = [];
   private authProvider: CLIOAuthProvider | null = null;
 
   constructor() {
-    this.anthropic = new Anthropic({
-      apiKey: ANTHROPIC_API_KEY!,
-      baseURL: ANTHROPIC_BASE_URL!,
-    });
+    const providerType = process.env.LLM_PROVIDER || "anthropic";
+    if (providerType === "openai") {
+      this.provider = new OpenAIProvider();
+    } else {
+      this.provider = new AnthropicProvider();
+    }
+    console.log(`Using ${providerType.toUpperCase()} provider`);
     this.mcp = new Client({ name: "mcp-client-cli", version: "1.0.0" });
   }
 
@@ -210,8 +180,8 @@ class MCPClient {
       this.tools = toolsResult.tools.map((tool) => ({
         name: tool.name,
         description: tool.description,
-        input_schema: tool.inputSchema,
-      })) as Tool[];
+        inputSchema: tool.inputSchema,
+      })) as MCPTool[];
 
       console.log(
         "Connected to local server with tools:",
@@ -307,8 +277,8 @@ class MCPClient {
         this.tools = toolsResult.tools.map((tool) => ({
           name: tool.name,
           description: tool.description,
-          input_schema: tool.inputSchema,
-        })) as Tool[];
+          inputSchema: tool.inputSchema,
+        })) as MCPTool[];
 
         console.log(
           "Connected to remote server with tools:",
@@ -342,94 +312,30 @@ class MCPClient {
    * Process a user query with multi-turn tool execution
    */
   async processQuery(query: string): Promise<string> {
-    const messages: MessageParam[] = [
-      {
-        role: "user",
-        content: query,
-      },
-    ];
-
-    const finalText: string[] = [];
-
-    while (true) {
-      const response = await this.anthropic.messages.create({
-        model: ANTHROPIC_MODEL!,
-        max_tokens: 1000,
-        messages,
-        tools: this.tools,
-      });
-
-      // Defensive check for valid response
-      if (!response?.content || !Array.isArray(response.content)) {
-        console.error("Empty or malformed model response:", response);
-        break;
-      }
-
-      // Add assistant response to history
-      messages.push({
-        role: "assistant",
-        content: response.content as any,
-      });
-
-      let hasToolUse = false;
-      const toolResults: Array<{
-        type: string;
-        tool_use_id?: string;
-        content: string;
-      }> = [];
-
-      // Process each content block
-      for (const content of response.content) {
-        if (content.type === "text") {
-          finalText.push(content.text);
-        } else if (content.type === "tool_use") {
-          hasToolUse = true;
-          const toolName = content.name;
-          const toolArgs = content.input as Record<string, unknown> | undefined;
-
-          console.log(`[Executing tool: ${toolName}]`);
-
-          // Execute tool via MCP server
-          const result = await this.mcp.callTool({
-            name: toolName,
-            arguments: toolArgs,
-          });
-
-          finalText.push(
-            `[Calling tool ${toolName} with args ${JSON.stringify(toolArgs)}]`,
-          );
-
-          // Format result content as string
-          const resultContent =
-            typeof result?.content === "string"
-              ? result.content
-              : JSON.stringify(result?.content ?? result);
-
-          toolResults.push({
-            type: "tool_result",
-            tool_use_id: content.id,
-            content: resultContent,
-          });
-        } else {
-          finalText.push(
-            `[Unknown content type from model: ${JSON.stringify(content)}]`,
-          );
-        }
-      }
-
-      // If no tool use, we're done
-      if (!hasToolUse) {
-        break;
-      }
-
-      // Add tool results for next turn
-      messages.push({
-        role: "user",
-        content: toolResults as any,
-      });
+    if (this.provider instanceof AnthropicProvider) {
+      // Convert MCPTool[] to Tool[] for Anthropic
+      const anthropicTools = this.tools.map((tool) => ({
+        name: tool.name,
+        description: tool.description,
+        input_schema: tool.inputSchema,
+      })) as Tool[];
+      return this.provider.processQuery(
+        query,
+        anthropicTools,
+        async (name: string, args: Record<string, unknown>) => {
+          return await this.mcp.callTool({ name, arguments: args });
+        },
+      );
+    } else {
+      // OpenAIProvider uses MCPTool[] directly
+      return this.provider.processQuery(
+        query,
+        this.tools,
+        async (name: string, args: Record<string, unknown>) => {
+          return await this.mcp.callTool({ name, arguments: args });
+        },
+      );
     }
-
-    return finalText.join("\n");
   }
 
   /**
