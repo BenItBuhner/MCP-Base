@@ -1,0 +1,38 @@
+[
+  {
+    "name": "Context7",
+    "url": "https://mcp.context7.com/mcp",
+    "auth": {
+      "type": "none"
+    }
+  },
+  {
+    "name": "Notion (Bearer Token)",
+    "url": "https://mcp.notion.com/mcp",
+    "auth": {
+      "type": "bearer",
+      "token": "${NOTION_ACCESS_TOKEN}"
+    }
+  },
+  {
+    "name": "Notion (OAuth)",
+    "url": "https://mcp.notion.com/mcp",
+    "auth": {
+      "type": "oauth",
+      "oauth": {
+        "clientId": "${NOTION_CLIENT_ID}",
+        "clientSecret": "${NOTION_CLIENT_SECRET}",
+        "authorizationUrl": "https://api.notion.com/v1/oauth/authorize",
+        "tokenUrl": "https://api.notion.com/v1/oauth/token",
+        "redirectUri": "http://localhost:8090/callback",
+        "scopes": []
+      }
+    }
+  },
+  {
+    "name": "Playwright",
+    "type": "local",
+    "command": "npx",
+    "args": ["@playwright/mcp@latest"]
+  }
+]
