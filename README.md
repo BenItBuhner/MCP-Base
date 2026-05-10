@@ -2,6 +2,8 @@
 
 A command-line MCP (Model Context Protocol) client supporting both Anthropic Claude and OpenAI GPT models for LLM-powered tool execution.
 
+Need a small AI/MCP project made clearer before you share it? See the [$20 AI Agent Launch Rescue](./AI_AGENT_LAUNCH_RESCUE.md).
+
 ## Features
 
 - **Multi-Provider Support**: Switch between Anthropic Claude and OpenAI GPT via environment variables
